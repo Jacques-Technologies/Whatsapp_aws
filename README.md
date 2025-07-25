@@ -15,7 +15,6 @@ Este repositorio proporciona un backend reutilizable en AWS para integrar un bot
 7. [Ejemplos de Webhook de WhatsApp](#ejemplos-de-webhook-de-whatsapp)  
 8. [Esquema de DynamoDB](#esquema-de-dynamodb)  
 9. [Eliminación de Recursos](#eliminación-de-recursos)  
-10. [Contribuciones](#contribuciones)  
 
 ---
 
@@ -215,18 +214,6 @@ Para desmontar la infraestructura creada:
 ```bash
 sam delete --stack-name whatsapp-gpt-bot --no-prompts
 ```
-
----
-
-## Contribuciones
-
-Se aceptan pull requests para:
-
-- Mejorar plantillas VTL  
-- Añadir validaciones o logging  
-- Integración con otros servicios (e.g. S3, SNS)  
-
-Lee [CONTRIBUTING.md](CONTRIBUTING.md) (si existe) para más detalles.
 
 ---
 
