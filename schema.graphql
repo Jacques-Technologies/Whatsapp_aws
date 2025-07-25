@@ -1,0 +1,23 @@
+type Message {
+  id: ID!
+  sender: String!
+  recipient: String
+  content: String!
+  timestamp: AWSDateTime!
+}
+type Query {
+  getMessages: [Message!]!
+}
+type Mutation {
+  sendMessage(recipient: String!, content: String!): Message
+  receiveMessage(sender: String!, content: String!, messageId: ID!): Message
+}
+type Subscription {
+  onNewMessage: Message
+    @aws_subscribe(mutations: ["sendMessage", "receiveMessage"])
+}
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}

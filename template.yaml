@@ -1,0 +1,242 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS Serverless backend for WhatsApp GPT Bot
+
+Globals:
+  Function:
+    Timeout: 30
+
+Parameters:
+  AccessTokenParameter:
+    Type: String
+  PhoneNumberIdParameter:
+    Type: String
+  VerifyTokenParameter:
+    Type: String
+  AppSyncApiUrlParameter:
+    Type: String
+  AppSyncApiKeyParameter:
+    Type: String
+
+Resources:
+  # DynamoDB Table
+  MessageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: WhatsAppMessages
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # AppSync API
+  GraphQLApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: WhatsAppGraphQLApi
+      AuthenticationType: API_KEY
+
+  GraphQLApiKey:
+    Type: AWS::AppSync::ApiKey
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+
+  GraphQLSchema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Definition: |
+        type Message {
+          id: ID!
+          sender: String!
+          recipient: String
+          content: String!
+          timestamp: AWSDateTime!
+        }
+        type Query {
+          getMessages: [Message!]!
+        }
+        type Mutation {
+          sendMessage(recipient: String!, content: String!): Message
+          receiveMessage(sender: String!, content: String!, messageId: ID!): Message
+        }
+        type Subscription {
+          onNewMessage: Message
+            @aws_subscribe(mutations: ["sendMessage", "receiveMessage"])
+        }
+        schema {
+          query: Query
+          mutation: Mutation
+          subscription: Subscription
+        }
+
+  # IAM Role for AppSync
+  AppSyncServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - appsync.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: AppSyncDynamoDBPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:Scan
+                Resource: !GetAtt MessageTable.Arn
+        - PolicyName: AppSyncInvokeLambdaPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: "*"
+
+  # Data sources
+  MessageTableDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: MessageTableDataSource
+      Type: AMAZON_DYNAMODB
+      DynamoDBConfig:
+        TableName: !Ref MessageTable
+        AwsRegion: !Ref AWS::Region
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+
+  SendMessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: SendWhatsAppMessageFunction
+      Handler: app.handler
+      Runtime: nodejs18.x
+      CodeUri: src/sendMessage/
+      Environment:
+        Variables:
+          ACCESS_TOKEN: !Ref AccessTokenParameter
+          PHONE_NUMBER_ID: !Ref PhoneNumberIdParameter
+          MESSAGE_TABLE: !Ref MessageTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MessageTable
+
+  SendMessageDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: SendMessageDataSource
+      Type: AWS_LAMBDA
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt SendMessageFunction.Arn
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+
+  # AppSync Resolvers
+  GetMessagesResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getMessages
+      DataSourceName: MessageTableDataSource
+      RequestMappingTemplate: |
+        {
+          "version": "2017-02-28",
+          "operation": "Scan"
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+
+  SendMessageResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: sendMessage
+      DataSourceName: SendMessageDataSource
+      RequestMappingTemplate: |
+        {
+          "version": "2018-05-29",
+          "payload": {}
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+
+  ReceiveMessageResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: receiveMessage
+      DataSourceName: MessageTableDataSource
+      RequestMappingTemplate: |
+        {
+          "version": "2017-02-28",
+          "operation": "PutItem",
+          "key": {
+            "id": { "S": "${ctx.args.messageId}" }
+          },
+          "attributeValues": {
+            "sender": { "S": "${ctx.args.sender}" },
+            "content": { "S": "${ctx.args.content}" },
+            "recipient": { "S": "${ctx.args.sender}" },
+            "timestamp": { "S": "$util.nowISO8601()" }
+          }
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+
+  OnNewMessageResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Subscription
+      FieldName: onNewMessage
+      DataSourceName: MessageTableDataSource
+      RequestMappingTemplate: |
+        {}
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+
+  # Webhook Lambda for WhatsApp
+  WebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: WhatsAppWebhookFunction
+      Handler: app.handler
+      Runtime: nodejs18.x
+      CodeUri: src/webhook/
+      Events:
+        WebhookAPI:
+          Type: Api
+          Properties:
+            Path: /webhook
+            Method: ANY
+      Environment:
+        Variables:
+          VERIFY_TOKEN: !Ref VerifyTokenParameter
+          APPSYNC_API_URL: !Ref AppSyncApiUrlParameter
+          APPSYNC_API_KEY: !Ref AppSyncApiKeyParameter
+
+Outputs:
+  WebhookUrl:
+    Description: "URL for WhatsApp Webhook (GET and POST)"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook"
+  GraphQLApiUrl:
+    Description: "GraphQL API URL"
+    Value: !GetAtt GraphQLApi.GraphQLUrl
+  GraphQLApiKey:
+    Description: "GraphQL API Key"
+    Value: !GetAtt GraphQLApiKey.ApiKey

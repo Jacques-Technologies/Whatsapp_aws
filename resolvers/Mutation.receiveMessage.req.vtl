@@ -1,0 +1,13 @@
+{
+  "version": "2017-02-28",
+  "operation": "PutItem",
+  "key": {
+    "id": { "S": "${ctx.args.messageId}" }
+  },
+  "attributeValues": {
+    "sender": { "S": "${ctx.args.sender}" },
+    "content": { "S": "${ctx.args.content}" },
+    "recipient": { "S": "${ctx.args.sender}" },
+    "timestamp": { "S": "$util.nowISO8601()" }
+  }
+}
