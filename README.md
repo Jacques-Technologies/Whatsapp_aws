@@ -16,7 +16,6 @@ Este repositorio proporciona un backend reutilizable en AWS para integrar un bot
 8. [Esquema de DynamoDB](#esquema-de-dynamodb)  
 9. [Eliminación de Recursos](#eliminación-de-recursos)  
 10. [Contribuciones](#contribuciones)  
-11. [Licencia](#licencia)  
 
 ---
 
