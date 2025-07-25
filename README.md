@@ -1,109 +1,234 @@
-# AWS Backend for WhatsApp GPT Bot
+# AWS Backend para WhatsApp GPT Bot
 
-This project provides a reusable backend on AWS using AppSync, DynamoDB, Lambda, and API Gateway (webhook) for a WhatsApp GPT Bot. It supports sending and receiving messages, real-time subscriptions, and data storage.
+Este repositorio proporciona un backend reutilizable en AWS para integrar un bot de WhatsApp potenciado por GPT. Utiliza AppSync (GraphQL), DynamoDB, Lambda y API Gateway (webhook) para enviar y recibir mensajes, suscripciones en tiempo real y persistencia de datos.
 
-## File Structure
+---
 
-- `template.yaml`: AWS SAM/CloudFormation template defining resources.
-- `src/webhook/`: AWS Lambda for handling WhatsApp webhooks.
-  - `app.js`
-  - `package.json`
-- `src/sendMessage/`: AWS Lambda for sending WhatsApp messages via GraphQL.
-  - `app.js`
-  - `package.json`
-- `schema.graphql`: GraphQL schema for AppSync.
-- `resolvers/`: AppSync resolver mapping templates.
+## Tabla de Contenidos
 
-## Deployment
+1. [Descripción](#descripción)  
+2. [Requisitos](#requisitos)  
+3. [Estructura del Proyecto](#estructura-del-proyecto)  
+4. [Configuración de Entorno](#configuración-de-entorno)  
+5. [Despliegue con AWS SAM](#despliegue-con-aws-sam)  
+6. [Uso de la API GraphQL](#uso-de-la-api-graphql)  
+7. [Ejemplos de Webhook de WhatsApp](#ejemplos-de-webhook-de-whatsapp)  
+8. [Esquema de DynamoDB](#esquema-de-dynamodb)  
+9. [Eliminación de Recursos](#eliminación-de-recursos)  
+10. [Contribuciones](#contribuciones)  
+11. [Licencia](#licencia)  
 
-1. Install AWS SAM CLI.
-2. Run:
+---
+
+## Descripción
+
+Este backend en AWS facilita:
+
+- Recibir mensajes de WhatsApp a través de un webhook (API Gateway + Lambda).  
+- Persistir mensajes entrantes y salientes en DynamoDB.  
+- Exponer una API GraphQL con AppSync para:
+  - Consultar mensajes (`getMessages`).  
+  - Enviar mensajes (`sendMessage`).  
+  - Procesar respuestas del bot y guardarlas (`receiveMessage`).  
+  - Suscribirse a nuevos mensajes en tiempo real (`onNewMessage`).  
+
+---
+
+## Requisitos
+
+- Node.js ≥ 14.x  
+- AWS CLI configurado con credenciales válidas  
+- AWS SAM CLI instalado  
+- Cuenta AWS con permisos para crear:  
+  - Lambdas, DynamoDB, AppSync, API Gateway, IAM  
+
+---
+
+## Estructura del Proyecto
+
+```
+.
+├── README.md
+├── template.yaml              # Plantilla SAM/CloudFormation
+├── schema.graphql             # Definición de tipos y operaciones GraphQL
+├── resolvers/                 # Plantillas VTL para AppSync
+│   ├── Mutation.receiveMessage.req.vtl
+│   ├── Mutation.receiveMessage.res.vtl
+│   ├── Mutation.sendMessage.req.vtl
+│   ├── Mutation.sendMessage.res.vtl
+│   ├── Query.getMessages.req.vtl
+│   ├── Query.getMessages.res.vtl
+│   ├── Query.getMessages.res.vtl
+│   └── Subscription.onNewMessage.res.vtl
+└── src/
+    ├── webhook/               # Lambda para WhatsApp Webhook
+    │   ├── app.js
+    │   └── package.json
+    └── sendMessage/           # Lambda para enviar mensajes vía AppSync
+        ├── app.js
+        └── package.json
+```
+
+---
+
+## Configuración de Entorno
+
+Antes de desplegar, exporta en tu terminal o define en tu CI/CD las siguientes variables:
+
+- `WHATSAPP_ACCESS_TOKEN` : Token de acceso de tu cuenta de WhatsApp Business.  
+- `WHATSAPP_PHONE_NUMBER_ID`: ID de número de teléfono de WhatsApp.  
+- `WHATSAPP_VERIFY_TOKEN`   : Token de verificación para validar webhook.  
+
+Estas variables se pasarán automáticamente al desplegar con SAM.
+
+---
+
+## Despliegue con AWS SAM
+
+1. Instalar dependencias de cada función Lambda:
+
+   ```bash
+   cd src/webhook && npm install
+   cd ../sendMessage && npm install
+   cd ../../
+   ```
+
+2. Desplegar la pila con SAM:
+
+   ```bash
+   sam deploy \
+     --template-file template.yaml \
+     --stack-name whatsapp-gpt-bot \
+     --parameter-overrides \
+       AccessTokenParameter=$WHATSAPP_ACCESS_TOKEN \
+       PhoneNumberIdParameter=$WHATSAPP_PHONE_NUMBER_ID \
+       VerifyTokenParameter=$WHATSAPP_VERIFY_TOKEN \
+       AppSyncApiUrlParameter=<AppSyncApiUrl> \
+       AppSyncApiKeyParameter=<AppSyncApiKey> \
+     --capabilities CAPABILITY_IAM
+   ```
+
+3. Configura la URL de webhook en WhatsApp Business:
+
+   ```
+   https://<API_GATEWAY_URL>/Prod/webhook
+   ```
+   WhatsApp verificará enviando un `GET` con `hub.challenge`.
+
+---
+
+## Uso de la API GraphQL
+
+- **Endpoint**: `https://<AppSyncApiUrl>/graphql`  
+- **API Key**: `<AppSyncApiKey>` (en header `x-api-key`)
+
+Operaciones disponibles:
+
+1. **Query – getMessages**
+
+   ```graphql
+   query GetMessages($limit: Int!) {
+     getMessages(limit: $limit) {
+       id
+       sender
+       recipient
+       content
+       timestamp
+     }
+   }
+   ```
+
+2. **Mutation – sendMessage**
+
+   ```graphql
+   mutation SendMessage($to: String!, $text: String!) {
+     sendMessage(to: $to, text: $text) {
+       id
+       status
+     }
+   }
+   ```
+
+3. **Mutation – receiveMessage**
+
+   (Invocada internamente tras recibir webhook)
+
+4. **Subscription – onNewMessage**
+
+   ```graphql
+   subscription OnNewMessage {
+     onNewMessage {
+       id
+       sender
+       content
+       timestamp
+     }
+   }
+   ```
+
+---
+
+## Ejemplos de Webhook de WhatsApp
+
+### Mensaje entrante
+
+```json
+{
+  "object": "whatsapp_business_account",
+  "entry": [{ "changes": [{ "value": {
+    "messaging_product": "whatsapp",
+    "contacts":[{"profile":{"name":"Juan"},"wa_id":"123"}],
+    "messages":[{"from":"123","id":"wamid.ID","timestamp":"1620229022","text":{"body":"Hola"},"type":"text"}]
+  },"field":"messages"}]}]
+}
+```
+
+### Confirmación de lectura
+
+```json
+{
+  "object": "whatsapp_business_account",
+  "entry": [{ "changes": [{ "value": {
+    "statuses":[{"id":"wamid.ID","status":"read","timestamp":"1620229023","recipient_id":"MY_NUMBER"}]
+  },"field":"messages"}]}]
+}
+```
+
+---
+
+## Esquema de DynamoDB
+
+- **Tabla**: `WhatsAppMessages`  
+- **Clave primaria**: `id` (String)  
+- **Índice secundario** (opcional): `timestamp` para ordenar por fecha  
+- **Atributos**:  
+  - `sender` (String)  
+  - `recipient` (String)  
+  - `content` (String)  
+  - `timestamp` (String)  
+
+---
+
+## Eliminación de Recursos
+
+Para desmontar la infraestructura creada:
 
 ```bash
-sam deploy \
-  --template-file template.yaml \
-  --stack-name whatsapp-gpt-bot \
-  --parameter-overrides \
-    AccessTokenParameter=<YOUR_WHATSAPP_ACCESS_TOKEN> \
-    PhoneNumberIdParameter=<YOUR_PHONE_NUMBER_ID> \
-    VerifyTokenParameter=<YOUR_VERIFY_TOKEN> \
-    AppSyncApiUrlParameter=<The_AppSync_API_URL_from_stack_output> \
-    AppSyncApiKeyParameter=<The_AppSync_API_KEY_from_stack_output> \
-  --capabilities CAPABILITY_IAM
+sam delete --stack-name whatsapp-gpt-bot --no-prompts
 ```
 
-3. After deployment, set your WhatsApp webhook URL to:
-```
-https://<API_GATEWAY_URL>/Prod/webhook
-```
-For verification, WhatsApp will send a GET with `hub.challenge`.
+---
 
-4. Use the GraphQL API at the URL and API Key provided in stack outputs to query, mutate, and subscribe.
+## Contribuciones
 
-## WhatsApp Webhook Payload Examples
+Se aceptan pull requests para:
 
-### Message Received
-```json
-{
-  "object": "whatsapp_business_account",
-  "entry": [
-    {
-      "changes": [
-        {
-          "value": {
-            "messaging_product": "whatsapp",
-            "contacts": [
-              {
-                "profile": { "name": "John Doe" },
-                "wa_id": "1234567890"
-              }
-            ],
-            "messages": [
-              {
-                "from": "1234567890",
-                "id": "wamid.ID",
-                "timestamp": "1620229022",
-                "text": { "body": "Hello" },
-                "type": "text"
-              }
-            ]
-          },
-          "field": "messages"
-        }
-      ]
-    }
-  ]
-}
-```
+- Mejorar plantillas VTL  
+- Añadir validaciones o logging  
+- Integración con otros servicios (e.g. S3, SNS)  
 
-### Read Receipt
-```json
-{
-  "object": "whatsapp_business_account",
-  "entry": [
-    {
-      "changes": [
-        {
-          "value": {
-            "statuses": [
-              {
-                "id": "wamid.ID",
-                "status": "read",
-                "timestamp": "1620229023",
-                "recipient_id": "MY_NUMBER"
-              }
-            ]
-          },
-          "field": "messages"
-        }
-      ]
-    }
-  ]
-}
-```
+Lee [CONTRIBUTING.md](CONTRIBUTING.md) (si existe) para más detalles.
 
-## DynamoDB Schema
+---
 
-- Table: `WhatsAppMessages`
-- Primary Key: `id` (String)
-- Attributes: `sender` (String), `recipient` (String), `content` (String), `timestamp` (String)
+
